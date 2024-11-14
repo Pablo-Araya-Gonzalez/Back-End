@@ -1,7 +1,8 @@
 // index.js
 import express from 'express';
 import bodyParser from 'body-parser';
-import routes from './routes'; // Importación del enrutador
+import pool from './db.js'; // Conexión a la base de datos
+import routes from './routes.js'; // Importación correcta de rutas
 
 const app = express();
 const PORT = 3001;
