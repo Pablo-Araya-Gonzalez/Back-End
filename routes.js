@@ -1,8 +1,9 @@
 // routes.js
 import express from 'express';
 import pool from './db.js'; // Importación correcta de `db.js` con extensión .js
-
-const router = express.Router();
+import xlsx from 'xlsx';
+import { Router } from 'express';
+const router = Router();
 
 // Ruta para registrar un nuevo usuario
 router.post('/usuarios', async (req, res) => {
@@ -168,24 +169,13 @@ router.get('/usuarios/:id/reporte', async (req, res) => {
         const respuestas = respuestasResult.rows[0].respuestas;
         const puntajeFinal = respuestasResult.rows[0].puntaje_final;
 
-        // Lista completa de preguntas fijas con opciones correctas
-        const preguntas = [
-            { id: "p1", texto: "Pregunta 1", correcta: "sí" },
-            { id: "p2", texto: "Pregunta 2", correcta: "sí" },
-            { id: "p3", texto: "Pregunta 3", correcta: "sí" },
-            { id: "p4", texto: "Pregunta 4", correcta: "sí" },
-            { id: "p5", texto: "Pregunta 5", correcta: "sí" },
-            { id: "p6", texto: "Pregunta 6", correcta: "sí" },
-            { id: "p7", texto: "Pregunta 7", correcta: "sí" },
-            { id: "p8", texto: "Pregunta 8", correcta: "sí" },
-            { id: "p9", texto: "Pregunta 9", correcta: "sí" },
-            { id: "p10", texto: "Pregunta 10", correcta: "sí" }
-            // Añade todas las preguntas necesarias con sus respuestas correctas
-        ];
+        // Consulta para obtener todas las preguntas de la tabla "preguntas"
+        const preguntasResult = await pool.query(`SELECT id, texto, correcta FROM preguntas`);
+        const preguntas = preguntasResult.rows;
 
         // Crear el reporte combinando preguntas, respuestas y opciones correctas
         const reporte = preguntas.map(pregunta => {
-            const respuestaUsuario = respuestas[pregunta.id];
+            const respuestaUsuario = respuestas[`p${pregunta.id}`]; // Relaciona las respuestas por ID de pregunta
             return {
                 pregunta: pregunta.texto,
                 respuesta_usuario: respuestaUsuario,
@@ -210,6 +200,65 @@ router.get('/usuarios/:id/reporte', async (req, res) => {
     }
 });
 
+// Ruta para obtener todas las preguntas
+router.get('/preguntas', async (req, res) => {
+    try {
+        const result = await pool.query(`SELECT id, texto, correcta FROM preguntas`);
+        res.status(200).json(result.rows);
+    } catch (error) {
+        console.error("Database Error:", error.message);
+        res.status(500).json({ error: 'Error al obtener las preguntas' });
+    }
+});
 
+// excel
+router.get('/usuarios/:id/reporte/excel', async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        // Obtener el reporte del usuario desde la base de datos
+        const userReport = await pool.query(
+            `SELECT u.nombre, u.email, r.puntaje_final, r.respuestas
+             FROM usuarios u
+             JOIN respuestas r ON u.id = r.usuario_id
+             WHERE u.id = $1`,
+            [id]
+        );
+
+        if (userReport.rows.length === 0) {
+            return res.status(404).json({ error: 'Reporte no encontrado' });
+        }
+
+        const user = userReport.rows[0];
+        const respuestas = user.respuestas;
+
+        // Crear un array para almacenar los datos en formato de filas y columnas
+        const reportData = [
+            ['Nombre Usuario', 'Email', 'Puntaje Final', 'Pregunta', 'Respuesta Usuario', 'Respuesta Correcta']
+        ];
+
+        // Agregar los datos de usuario y las respuestas al array
+        for (const [pregunta, respuestaUsuario] of Object.entries(respuestas)) {
+            const respuestaCorrecta = respuestaUsuario === 'sí' ? 'sí' : 'no'; // Ajustar según tus reglas de respuestas correctas
+            reportData.push([user.nombre, user.email, user.puntaje_final, pregunta, respuestaUsuario, respuestaCorrecta]);
+        }
+
+        // Crear el libro de Excel y la hoja
+        const workbook = xlsx.utils.book_new();
+        const worksheet = xlsx.utils.aoa_to_sheet(reportData);
+        xlsx.utils.book_append_sheet(workbook, worksheet, 'Reporte');
+
+        // Escribir el archivo en un buffer
+        const buffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+        // Configurar la respuesta para descargar el archivo
+        res.setHeader('Content-Disposition', `attachment; filename=reporte_usuario_${id}.xlsx`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.send(buffer);
+    } catch (error) {
+        console.error('Error al generar el reporte:', error);
+        res.status(500).json({ error: 'Error al generar el reporte' });
+    }
+});
 
 export default router;
