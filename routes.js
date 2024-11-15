@@ -211,47 +211,58 @@ router.get('/preguntas', async (req, res) => {
     }
 });
 
-// excel
 router.get('/usuarios/:id/reporte/excel', async (req, res) => {
     const { id } = req.params;
 
     try {
-        // Obtener el reporte del usuario desde la base de datos
+        console.log(`Generando reporte para usuario con ID: ${id}`);
+
+        // Verifica si existen respuestas para el usuario en la tabla de respuestas
+        const respuestaExistente = await pool.query(
+            'SELECT * FROM respuestas WHERE usuario_id = $1',
+            [id]
+        );
+
+        if (respuestaExistente.rows.length === 0) {
+            console.error('No se encontraron respuestas para el usuario');
+            return res.status(404).json({ error: 'No se encontraron respuestas para el usuario' });
+        }
+
+        // Ahora realiza la consulta para obtener los textos de las preguntas y las respuestas del usuario
         const userReport = await pool.query(
-            `SELECT u.nombre, u.email, r.puntaje_final, r.respuestas
+            `SELECT u.nombre, u.email, r.puntaje_final, p.texto AS pregunta, COALESCE(r.respuestas->>('p' || p.id::text), 'Sin respuesta') AS respuesta_usuario
              FROM usuarios u
-             JOIN respuestas r ON u.id = r.usuario_id
+             LEFT JOIN respuestas r ON u.id = r.usuario_id
+             JOIN preguntas p ON ('p' || p.id::text) = ANY(ARRAY(SELECT jsonb_object_keys(r.respuestas)))
              WHERE u.id = $1`,
             [id]
         );
 
+        console.log('Resultado de userReport:', userReport.rows);
+
         if (userReport.rows.length === 0) {
+            console.error('Reporte no encontrado para el usuario');
             return res.status(404).json({ error: 'Reporte no encontrado' });
         }
 
         const user = userReport.rows[0];
-        const respuestas = user.respuestas;
-
-        // Crear un array para almacenar los datos en formato de filas y columnas
         const reportData = [
             ['Nombre Usuario', 'Email', 'Puntaje Final', 'Pregunta', 'Respuesta Usuario', 'Respuesta Correcta']
         ];
 
-        // Agregar los datos de usuario y las respuestas al array
-        for (const [pregunta, respuestaUsuario] of Object.entries(respuestas)) {
-            const respuestaCorrecta = respuestaUsuario === 'sí' ? 'sí' : 'no'; // Ajustar según tus reglas de respuestas correctas
-            reportData.push([user.nombre, user.email, user.puntaje_final, pregunta, respuestaUsuario, respuestaCorrecta]);
+        for (const row of userReport.rows) {
+            const respuestaCorrecta = row.respuesta_usuario === 'sí' ? 'sí' : 'no'; // Ajusta según tu criterio de respuestas correctas
+            reportData.push([user.nombre, user.email, user.puntaje_final, row.pregunta, row.respuesta_usuario, respuestaCorrecta]);
         }
 
-        // Crear el libro de Excel y la hoja
+        console.log('Datos para el archivo Excel:', reportData);
+
         const workbook = xlsx.utils.book_new();
         const worksheet = xlsx.utils.aoa_to_sheet(reportData);
         xlsx.utils.book_append_sheet(workbook, worksheet, 'Reporte');
 
-        // Escribir el archivo en un buffer
         const buffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 
-        // Configurar la respuesta para descargar el archivo
         res.setHeader('Content-Disposition', `attachment; filename=reporte_usuario_${id}.xlsx`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.send(buffer);
